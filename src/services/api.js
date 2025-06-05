@@ -2,7 +2,8 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Use your computer's IP address instead of localhost
-const API_URL = 'http://192.168.10.230:8080';
+// const API_URL = 'http://192.168.10.230:8080';
+const API_URL = 'http://192.168.8.38:8080';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -263,6 +264,25 @@ export const userAPI = {
     }
   },
 
+  // Get another user's profile
+  getUserProfile: async (userId) => {
+    try {
+      console.log('Fetching another user profile:', userId);
+      const token = await AsyncStorage.getItem('token');
+      const response = await api.get(`/users/${userId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      console.log('User profile fetched:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Get user profile error:', error);
+      throw {
+        message: error.response?.data?.message || 'Failed to fetch user profile',
+        status: error.response?.status
+      };
+    }
+  },
+
   // Update user profile
   updateProfile: async (userId, data) => {
     try {
@@ -281,117 +301,177 @@ export const userAPI = {
 };
 
 export const goalsAPI = {
-  // Create goal
-  createGoal: async (goalData) => {
+  /**
+   * Получить список целей с meta
+   * @returns {Promise<{data: Goal[], meta: {total: number, page: number, per_page: number}}>} 
+   */
+  getGoals: async (params = {}) => {
     try {
-      console.log('Creating goal:', goalData);
-      const response = await api.post('/goals', goalData);
-      console.log('Goal created:', response.data);
+      // params: { page, per_page, ... }
+      const response = await api.get('/goals', { params });
+      // Возвращаем data и meta согласно контракту
       return response.data;
     } catch (error) {
-      console.error('Create goal error:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to create goal',
-        status: error.response?.status
-      };
-    }
-  },
-
-  // Get goal
-  getGoal: async (goalId) => {
-    try {
-      console.log('Fetching goal:', goalId);
-      const response = await api.get(`/goals/${goalId}`);
-      console.log('Goal fetched:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('Get goal error:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to fetch goal',
-        status: error.response?.status
-      };
-    }
-  },
-
-  // Update goal
-  updateGoal: async (goalId, goalData) => {
-    try {
-      console.log('Updating goal:', { goalId, goalData });
-      const response = await api.put(`/goals/${goalId}`, goalData);
-      console.log('Goal updated:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('Update goal error:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to update goal',
-        status: error.response?.status
-      };
-    }
-  },
-
-  // Delete goal
-  deleteGoal: async (goalId) => {
-    try {
-      console.log('Deleting goal:', goalId);
-      await api.delete(`/goals/${goalId}`);
-      console.log('Goal deleted successfully');
-      return true;
-    } catch (error) {
-      console.error('Delete goal error:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to delete goal',
-        status: error.response?.status
-      };
-    }
-  },
-
-  // Update goal progress
-  updateProgress: async (goalId, progressData) => {
-    try {
-      console.log('Updating goal progress:', { goalId, progressData });
-      const response = await api.patch(`/goals/${goalId}/progress`, progressData);
-      console.log('Goal progress updated:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('Update goal progress error:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to update goal progress',
-        status: error.response?.status
-      };
-    }
-  },
-
-  // Get goal progress
-  getProgress: async (goalId) => {
-    try {
-      console.log('Fetching goal progress:', goalId);
-      const response = await api.get(`/goals/${goalId}/progress`);
-      console.log('Goal progress fetched:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('Get goal progress error:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to fetch goal progress',
-        status: error.response?.status
-      };
-    }
-  },
-
-  // Get all goals
-  getGoals: async () => {
-    try {
-      console.log('Fetching all goals');
-      const response = await api.get('/goals');
-      console.log('Goals fetched:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('Get goals error:', error);
       throw {
         message: error.response?.data?.message || 'Failed to fetch goals',
-        status: error.response?.status
+        status: error.response?.status,
+        data: error.response?.data
+      };
+    }
+  },
+
+  /**
+   * Создать цель
+   * @param {CreateGoalRequest} goalData
+   * @returns {Promise<{data: Goal, message: string}>}
+   */
+  createGoal: async (goalData) => {
+    try {
+      const response = await api.post('/goals', goalData);
+      return response.data;
+    } catch (error) {
+      throw {
+        message: error.response?.data?.message || 'Failed to create goal',
+        status: error.response?.status,
+        data: error.response?.data
+      };
+    }
+  },
+
+  /**
+   * Получить детали цели
+   * @param {number} goalId
+   * @returns {Promise<{data: Goal}>}
+   */
+  getGoal: async (goalId) => {
+    try {
+      const response = await api.get(`/goals/${goalId}`);
+      return response.data;
+    } catch (error) {
+      throw {
+        message: error.response?.data?.message || 'Failed to fetch goal',
+        status: error.response?.status,
+        data: error.response?.data
+      };
+    }
+  },
+
+  /**
+   * Обновить цель
+   * @param {number} goalId
+   * @param {UpdateGoalRequest} goalData
+   * @returns {Promise<{data: Goal, message: string}>}
+   */
+  updateGoal: async (goalId, goalData) => {
+    try {
+      const response = await api.put(`/goals/${goalId}`, goalData);
+      return response.data;
+    } catch (error) {
+      throw {
+        message: error.response?.data?.message || 'Failed to update goal',
+        status: error.response?.status,
+        data: error.response?.data
+      };
+    }
+  },
+
+  /**
+   * Удалить цель
+   * @param {number} goalId
+   * @returns {Promise<{message: string}>}
+   */
+  deleteGoal: async (goalId) => {
+    try {
+      const response = await api.delete(`/goals/${goalId}`);
+      return response.data;
+    } catch (error) {
+      throw {
+        message: error.response?.data?.message || 'Failed to delete goal',
+        status: error.response?.status,
+        data: error.response?.data
+      };
+    }
+  },
+
+  /**
+   * Обновить статус шага цели
+   * @param {number} goalId
+   * @param {string} stepTitle - название шага
+   * @param {'pending'|'completed'} status
+   * @returns {Promise<{data: GoalStep, message: string}>}
+   */
+  updateGoalStepStatus: async (goalId, stepTitle, status) => {
+    try {
+      const response = await api.patch(`/goals/${goalId}/progress`, {
+        step: stepTitle,
+        done: status === 'completed'
+      });
+      return response.data;
+    } catch (error) {
+      throw {
+        message: error.response?.data?.message || 'Failed to update step status',
+        status: error.response?.status,
+        data: error.response?.data
       };
     }
   },
 };
+
+// Типы для справки (можно вынести в отдельный файл):
+/**
+interface Goal {
+  id: number;
+  name: string;
+  category: string;
+  description: string;
+  due_date: string;
+  status: 'not_started' | 'in_progress' | 'completed' | 'cancelled';
+  created_at: string;
+  updated_at: string;
+  user_id: number;
+  steps: GoalStep[];
+  collaborators: GoalCollaborator[];
+}
+interface GoalStep {
+  id: number;
+  goal_id: number;
+  title: string;
+  description: string;
+  status: 'pending' | 'completed';
+  order: number;
+  created_at: string;
+  updated_at: string;
+}
+interface GoalCollaborator {
+  id: number;
+  goal_id: number;
+  user_id: number;
+  role: 'viewer' | 'editor';
+  created_at: string;
+  updated_at: string;
+  user: {
+    id: number;
+    username: string;
+    email: string;
+  };
+}
+interface CreateGoalRequest {
+  name: string;
+  category: string;
+  description: string;
+  due_date: string;
+  steps: { title: string; description: string; order: number }[];
+  collaborators?: { user_id: number; role: 'viewer' | 'editor' }[];
+}
+interface UpdateGoalRequest {
+  name?: string;
+  category?: string;
+  description?: string;
+  due_date?: string;
+  status?: 'not_started' | 'in_progress' | 'completed' | 'cancelled';
+  steps?: { id?: number; title: string; description: string; status?: 'pending' | 'completed'; order: number }[];
+  collaborators?: { user_id: number; role: 'viewer' | 'editor' }[];
+}
+*/
 
 export default api; 
