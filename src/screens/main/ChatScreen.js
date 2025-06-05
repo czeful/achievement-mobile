@@ -15,15 +15,25 @@ import {
   Modal,
   Dimensions,
   StatusBar,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Audio } from 'expo-av';
-import { format } from 'date-fns';
+import { format, isToday, isYesterday, parseISO } from 'date-fns';
+import { friendsAPI } from '../../services/api';
+import useChatSocket from '../../hooks/useChatSocket';
+import { getChat } from '../../services/chat'; // REST-метод получения истории сообщений
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import ChatMessage from '../../components/ChatMessage';
+import ChatDateLabel from '../../components/ChatDateLabel';
+import ChatMessageGroup from '../../components/ChatMessageGroup';
 
 const ChatScreen = () => {
+  console.log('ChatScreen');
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -36,6 +46,49 @@ const ChatScreen = () => {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const soundRef = useRef(null);
   const [selectedImage, setSelectedImage] = useState(null);
+  const [friends, setFriends] = useState([]);
+  const [isLoadingFriends, setIsLoadingFriends] = useState(true);
+  const [selectedFriend, setSelectedFriend] = useState(null);
+  const [token, setToken] = useState(null);
+  const [myId, setMyId] = useState(null);
+
+  useEffect(() => {
+    const fetchTokenAndId = async () => {
+      const t = await AsyncStorage.getItem('token');
+      setToken(t);
+      const userData = await AsyncStorage.getItem('userData');
+      if (userData) {
+        try {
+          const user = JSON.parse(userData);
+          setMyId(user.id);
+        } catch {}
+      }
+    };
+    if (selectedFriend) fetchTokenAndId();
+  }, [selectedFriend]);
+
+  const send = useChatSocket({
+    token,
+    onMessage: (msg) => {
+      console.log('onMessage from Socket.IO:', msg);
+      if (!msg) return;
+      setMessages(prev => [
+        {
+          id: msg.id || Date.now().toString(),
+          type: msg.type,
+          text: msg.text,
+          uri: msg.file_url || msg.uri || null,
+          name: msg.file_name || msg.name || null,
+          size: msg.file_size || msg.size || null,
+          mimeType: msg.mime_type || msg.mimeType || null,
+          sender: msg.sender_id === myId ? 'me' : 'them',
+          timestamp: msg.created_at ? new Date(msg.created_at) : new Date(),
+          duration: msg.duration,
+        },
+        ...prev,
+      ]);
+    }
+  });
 
   useEffect(() => {
     if (isRecording) {
@@ -86,6 +139,55 @@ const ChatScreen = () => {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const fetchFriends = async () => {
+      setIsLoadingFriends(true);
+      try {
+        const data = await friendsAPI.getFriends();
+        setFriends(data || []);
+      } catch (e) {
+        Alert.alert('Error', 'Failed to load friends');
+      } finally {
+        setIsLoadingFriends(false);
+      }
+    };
+    fetchFriends();
+  }, []);
+
+  // Загрузка истории сообщений при выборе друга
+  useEffect(() => {
+    if (!selectedFriend) {
+      setMessages([]);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await getChat(selectedFriend.id);
+        const rawList = res.data || [];
+        const chatHistory = rawList.map(msg => ({
+          id: msg.id ? msg.id.toString() : `${msg.created_at}_${msg.sender_id}`,
+          sender: msg.sender_id === myId ? 'me' : 'them',
+          type: msg.type,
+          text: msg.text || null,
+          uri: msg.file_url || null,
+          name: msg.file_name || null,
+          size: msg.file_size || null,
+          mimeType: msg.mime_type || null,
+          timestamp: new Date(msg.created_at),
+        }));
+        setMessages(chatHistory.reverse());
+      } catch (error) {
+        console.error('Ошибка при загрузке истории чата:', error);
+        Alert.alert('Ошибка', 'Не удалось загрузить историю сообщений');
+        setMessages([]);
+      }
+    })();
+  }, [selectedFriend, myId]);
+
+  useEffect(() => {
+    console.log('messages.length:', messages.length);
+  }, [messages]);
 
   const startRecording = async () => {
     try {
@@ -170,7 +272,7 @@ const ChatScreen = () => {
       setIsRecording(false);
 
       // Add message to chat
-      setMessages(prev => [...prev, newMessage]);
+      sendMessage(newMessage);
     } catch (error) {
       console.error('Failed to send recording:', error);
       Alert.alert('Error', 'Failed to send recording');
@@ -186,6 +288,24 @@ const ChatScreen = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const uploadFileToServer = async (file, token) => {
+    const formData = new FormData();
+    formData.append('file', {
+      uri: file.uri,
+      name: file.name || 'file',
+      type: file.type || 'application/octet-stream',
+    });
+    const response = await fetch('http://192.168.8.38:4000/upload', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    if (!response.ok) throw new Error('File upload failed');
+    return await response.json();
+  };
+
   const pickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -195,18 +315,28 @@ const ChatScreen = () => {
       });
 
       if (!result.canceled) {
+        const asset = result.assets[0];
+        const file = {
+          uri: asset.uri,
+          name: asset.fileName || 'image.jpg',
+          type: asset.type || 'image/jpeg',
+        };
+        // 1. Загрузка на сервер
+        const data = await uploadFileToServer(file, token);
+        // 2. Отправка сообщения через сокет
         const newMessage = {
           id: Date.now().toString(),
           type: 'image',
-          uri: result.assets[0].uri,
+          file_url: data.url,
+          file_name: data.name,
           sender: 'me',
           timestamp: new Date(),
         };
-        setMessages(prev => [...prev, newMessage]);
+        sendMessage(newMessage);
       }
     } catch (error) {
-      console.error('Failed to pick image:', error);
-      Alert.alert('Error', 'Failed to pick image');
+      console.error('Failed to pick image or upload:', error);
+      Alert.alert('Error', 'Failed to pick or upload image');
     }
   };
 
@@ -287,42 +417,43 @@ const ChatScreen = () => {
     setSelectedFile(null);
   };
 
-  const sendFile = () => {
+  const sendFile = async () => {
     if (!selectedFile) {
       console.log('No file selected to send');
       return;
     }
-
-    console.log('Sending file:', selectedFile);
-
-    const newMessage = {
-      id: Date.now().toString(),
-      type: 'file',
-      uri: selectedFile.uri,
-      name: selectedFile.name,
-      size: selectedFile.size,
-      mimeType: selectedFile.type,
-      sender: 'me',
-      timestamp: new Date(),
-    };
-
-    console.log('Creating new message:', newMessage);
-    setMessages(prev => [...prev, newMessage]);
-    setSelectedFile(null);
+    try {
+      // 1. Загрузка на сервер
+      const data = await uploadFileToServer(selectedFile, token);
+      // 2. Отправка сообщения через сокет
+      const isImage = selectedFile.type && selectedFile.type.startsWith('image/');
+      const newMessage = {
+        id: Date.now().toString(),
+        type: isImage ? 'image' : 'file',
+        file_url: data.url,
+        file_name: data.name,
+        sender: 'me',
+        timestamp: new Date(),
+      };
+      sendMessage(newMessage);
+      setSelectedFile(null);
+    } catch (error) {
+      console.error('Failed to upload or send file:', error);
+      Alert.alert('Error', 'Failed to upload or send file');
+    }
   };
 
   const handleSend = () => {
-    if (!inputText.trim()) return;
-
+    if (!inputText.trim() || !selectedFriend) return;
     const newMessage = {
       id: Date.now().toString(),
       type: 'text',
       text: inputText,
-      sender: 'me',
+      senderId: 'me',
+      to: selectedFriend.id,
       timestamp: new Date(),
     };
-
-    setMessages(prev => [...prev, newMessage]);
+    sendMessage(newMessage);
     setInputText('');
   };
 
@@ -392,86 +523,123 @@ const ChatScreen = () => {
     setSelectedImage(null);
   };
 
-  const renderMessage = ({ item }) => {
-    const isMe = item.sender === 'me';
-    const isPlaying = playingMessageId === item.id;
+  const sendMessage = (msgObj) => {
+    if (!token || !selectedFriend) {
+      console.warn('No token or selectedFriend, cannot send message');
+      return;
+    }
+    send({ ...msgObj, receiver_id: selectedFriend.id });
+    setMessages(prev => [{ ...msgObj, sender: 'me' }, ...prev]);
+  };
 
-    const renderContent = () => {
-      switch (item.type) {
-        case 'voice':
-          return (
-            <TouchableOpacity 
-              style={styles.voiceMessage}
-              onPress={() => {
-                if (isPlaying) {
-                  stopVoiceMessage();
-                } else {
-                  playVoiceMessage(item.uri, item.id);
-                }
-              }}
-            >
-              <Icon 
-                name={isPlaying ? "pause" : "play"} 
-                size={24} 
-                color="#fff" 
-              />
-              <Text style={styles.voiceMessageText}>
-                Voice Message {item.duration ? `(${formatDuration(item.duration)})` : ''}
-              </Text>
-            </TouchableOpacity>
-          );
-        case 'image':
-          return (
-            <TouchableOpacity 
-              onPress={() => openImage(item.uri)}
-              style={styles.imageContainer}
-            >
-              <Image 
-                source={{ uri: item.uri }} 
-                style={styles.messageImage}
-                resizeMode="cover"
-              />
-            </TouchableOpacity>
-          );
-        case 'file':
-          console.log('Rendering file message:', item);
-          return (
-            <TouchableOpacity 
-              style={styles.fileMessage}
-              onPress={() => openFile(item.uri)}
-            >
-              <Icon 
-                name={getFileIcon(item.name)} 
-                size={24} 
-                color="#fff" 
-              />
-              <View style={styles.fileInfo}>
-                <Text style={styles.fileName} numberOfLines={1}>
-                  {item.name || 'Unnamed file'}
-                </Text>
-                <Text style={styles.fileSize}>
-                  {formatFileSize(item.size || 0)}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          );
-        default:
-          return <Text style={styles.messageText}>{item.text}</Text>;
-      }
-    };
+  // Группировка сообщений по датам
+  const groupMessagesByDate = (messages) => {
+    const groups = {};
+    messages.forEach(msg => {
+      const date = format(msg.timestamp, 'yyyy-MM-dd');
+      if (!groups[date]) groups[date] = [];
+      groups[date].push(msg);
+    });
+    // Сортируем даты по возрастанию (старые сверху)
+    const sortedDates = Object.keys(groups).sort();
+    return sortedDates.map(date => ({
+      date,
+      messages: groups[date].sort((a, b) => a.timestamp - b.timestamp)
+    }));
+  };
 
+  const groupedMessages = groupMessagesByDate(messages);
+
+  const renderDateLabel = (dateStr) => {
+    const dateObj = parseISO(dateStr + 'T00:00:00');
+    if (isToday(dateObj)) return 'Today';
+    if (isYesterday(dateObj)) return 'Yesterday';
+    return format(dateObj, 'dd.MM.yyyy');
+  };
+
+  const handlePlayVoice = (uri, messageId) => {
+    playVoiceMessage(uri, messageId);
+  };
+  const handleStopVoice = () => {
+    stopVoiceMessage();
+  };
+  const handleOpenFile = (uri) => {
+    openFile(uri);
+  };
+  const handleOpenImage = (uri) => {
+    openImage(uri);
+  };
+
+  const renderGroupedMessages = () => (
+    <>
+      {groupedMessages.map(group => (
+        <ChatMessageGroup
+          key={group.date}
+          dateLabel={renderDateLabel(group.date)}
+          messages={group.messages}
+          myId={myId}
+          playingMessageId={playingMessageId}
+          onPlayVoice={handlePlayVoice}
+          onStopVoice={handleStopVoice}
+          onOpenFile={handleOpenFile}
+          onOpenImage={handleOpenImage}
+        />
+      ))}
+    </>
+  );
+
+  if (!selectedFriend) {
     return (
-      <View style={[
-        styles.messageContainer,
-        isMe ? styles.myMessage : styles.theirMessage
-      ]}>
-        {renderContent()}
-        <Text style={styles.timestamp}>
-          {format(item.timestamp, 'HH:mm')}
-        </Text>
+      <View style={styles.emptyChatContainer}>
+        <View style={styles.emptyChatHeader}>
+          <Icon name="message-circle" size={32} color="#3B82F6" style={styles.emptyChatIcon} />
+          <Text style={styles.emptyChatTitle}>Select a friend to chat</Text>
+          <Text style={styles.emptyChatSubtitle}>Start chatting with your friends</Text>
+        </View>
+        {isLoadingFriends ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#3B82F6" />
+          </View>
+        ) : friends.length === 0 ? (
+          <View style={styles.noFriendsContainer}>
+            <Icon name="users" size={48} color="#9CA3AF" style={styles.noFriendsIcon} />
+            <Text style={styles.noFriendsText}>У вас пока нет друзей</Text>
+            <TouchableOpacity 
+              style={styles.addFriendsButton}
+              onPress={() => navigation.navigate('FindFriends')}
+            >
+              <Icon name="user-plus" size={20} color="#fff" style={styles.addFriendsIcon} />
+              <Text style={styles.addFriendsText}>Найти друзей</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <FlatList
+            data={friends}
+            keyExtractor={item => item.id}
+            contentContainerStyle={styles.friendsList}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.friendItem}
+                activeOpacity={0.7}
+                onPress={() => setSelectedFriend(item)}
+              >
+                <View style={styles.friendAvatar}>
+                  <Icon name="user" size={24} color="#3B82F6" />
+                </View>
+                <View style={styles.friendInfo}>
+                  <Text style={styles.friendName}>{item.username}</Text>
+                  <Text style={styles.friendEmail}>{item.email}</Text>
+                </View>
+                <View style={styles.friendAction}>
+                  <Icon name="chevron-right" size={20} color="#A5B4FC" />
+                </View>
+              </TouchableOpacity>
+            )}
+          />
+        )}
       </View>
     );
-  };
+  }
 
   return (
     <KeyboardAvoidingView
@@ -483,15 +651,32 @@ const ChatScreen = () => {
         colors={['#F3F4F6', '#EBF8FF', '#F0FDF4']}
         style={styles.gradient}
       >
-        <FlatList
+        <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB', zIndex: 2, marginTop: 48 }}>
+          <TouchableOpacity
+            onPress={() => setSelectedFriend(null)}
+            style={{ marginRight: 16, padding: 8, borderRadius: 20, backgroundColor: '#EFF6FF' }}
+            activeOpacity={0.7}
+          >
+            <Icon name="arrow-left" size={24} color="#3B82F6" />
+          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#DBEAFE', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+              <Icon name="user" size={22} color="#2563EB" />
+            </View>
+            <View>
+              <Text style={{ fontSize: 17, fontWeight: '700', color: '#1E3A8A' }}>{selectedFriend?.username}</Text>
+              <Text style={{ fontSize: 13, color: '#64748B' }}>{selectedFriend?.email}</Text>
+            </View>
+          </View>
+        </View>
+        <ScrollView
           ref={flatListRef}
-          data={[...messages].reverse()}
-          renderItem={renderMessage}
-          keyExtractor={item => item.id}
+          style={{ flex: 1 }}
           contentContainerStyle={styles.messagesList}
-          inverted
-          onContentSizeChange={() => flatListRef.current?.scrollToOffset({ offset: 0 })}
-        />
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        >
+          {renderGroupedMessages()}
+        </ScrollView>
 
         {selectedFile && (
           <View style={styles.filePreviewContainer}>
@@ -809,6 +994,116 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  emptyChatContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 20,
+    paddingTop: 80,
+  },
+  emptyChatHeader: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  emptyChatIcon: {
+    marginBottom: 16,
+  },
+  emptyChatTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1E40AF',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptyChatSubtitle: {
+    fontSize: 16,
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noFriendsContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  noFriendsIcon: {
+    marginBottom: 16,
+  },
+  noFriendsText: {
+    fontSize: 18,
+    color: '#64748B',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  addFriendsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3B82F6',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  addFriendsIcon: {
+    marginRight: 8,
+  },
+  addFriendsText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  friendsList: {
+    paddingBottom: 32,
+  },
+  friendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    marginBottom: 12,
+    shadowColor: '#1D4ED8',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+  },
+  friendAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  friendInfo: {
+    flex: 1,
+  },
+  friendName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  friendEmail: {
+    fontSize: 14,
+    color: '#64748B',
+  },
+  friendAction: {
+    padding: 8,
   },
 });
 
