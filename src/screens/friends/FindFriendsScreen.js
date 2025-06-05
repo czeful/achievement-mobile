@@ -59,23 +59,29 @@ const FindFriendsScreen = () => {
   };
 
   const renderUser = ({ item }) => (
-    <View style={styles.userCard}>
+    <TouchableOpacity
+      style={styles.userCard}
+      onPress={() => navigation.navigate('UserProfile', { userId: item.id })}
+    >
       <View style={styles.userInfo}>
         <Text style={styles.username}>{item.username}</Text>
         <Text style={styles.email}>{item.email}</Text>
       </View>
-      <TouchableOpacity
-        style={[styles.addButton, sendingRequests[item.id] && styles.addButtonDisabled]}
-        onPress={() => handleSendRequest(item.id)}
-        disabled={sendingRequests[item.id]}
-      >
-        {sendingRequests[item.id] ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Icon name="user-plus" size={20} color="#fff" />
-        )}
-      </TouchableOpacity>
-    </View>
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={[styles.addButton, sendingRequests[item.id] && styles.addButtonDisabled]}
+          onPress={() => handleSendRequest(item.id)}
+          disabled={sendingRequests[item.id]}
+        >
+          {sendingRequests[item.id] ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Icon name="user-plus" size={20} color="#fff" />
+          )}
+        </TouchableOpacity>
+        <Icon name="chevron-right" size={20} color="#94A3B8" style={styles.chevron} />
+      </View>
+    </TouchableOpacity>
   );
 
   return (
@@ -248,6 +254,14 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginTop: 12,
     textAlign: 'center',
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  chevron: {
+    marginLeft: 4,
   },
 });
 

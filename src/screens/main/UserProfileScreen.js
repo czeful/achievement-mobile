@@ -1,51 +1,155 @@
-import { View, Text, TouchableOpacity, StyleSheet, Image, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Image, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { useEffect, useState } from 'react';
+import { userAPI, friendsAPI } from '../../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function UserProfileScreen({ navigation, route }) {
-  // In a real app, you would get the user data from the route params
-  const user = {
-    name: 'Jane Smith',
-    bio: 'UI/UX Designer',
-    avatar: 'https://via.placeholder.com/150',
-    stats: {
-      goals: 12,
-      friends: 156,
-      templates: 8
+  const userId = route.params?.userId;
+  const [user, setUser] = useState(null);
+  const [friendStatus, setFriendStatus] = useState('not_friend'); // 'friend', 'pending', 'not_friend'
+  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      setIsLoading(true);
+      try {
+        // Debug: print token and userId
+        const token = await AsyncStorage.getItem('token');
+        console.log('DEBUG TOKEN:', token);
+        console.log('DEBUG userId:', userId);
+        if (userId) {
+          const userData = await userAPI.getUserProfile(userId);
+          console.log('Received user data:', userData);
+          
+          if (!userData) {
+            throw new Error('No user data received');
+          }
+
+          const userInfo = {
+            username: userData.username,
+            email: userData.email,
+            role: userData.role,
+            id: userData.id || userData._id,
+            created_at: userData.created_at,
+            avatar: userData.avatar,
+            bio: userData.bio,
+            stats: userData.stats || {
+              goals: 0,
+              friends: 0,
+              templates: 0
+            }
+          };
+          console.log('Processed user info:', userInfo);
+          
+          setUser(userInfo);
+          setFriendStatus(userData.friend_status || 'not_friend');
+        } else {
+          console.log('No user ID available');
+          throw new Error('No user ID available');
+        }
+      } catch (error) {
+        console.error('Error fetching profile:', error);
+        if (error.status === 403) {
+          Alert.alert('Ошибка 403', 'Нет доступа к профилю. Проверьте токен или обратитесь к администратору.');
+        } else {
+          Alert.alert('Error', 'Failed to load profile: ' + error.message);
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    if (userId) {
+      fetchProfile();
+    }
+  }, [userId]);
+
+  const handleAddFriend = async () => {
+    try {
+      await friendsAPI.sendFriendRequest(userId);
+      setFriendStatus('pending');
+    } catch (error) {
+      console.error('Error sending friend request:', error);
     }
   };
+
+  const handleRemoveFriend = async () => {
+    try {
+      await friendsAPI.removeFriend(userId);
+      setFriendStatus('not_friend');
+    } catch (error) {
+      console.error('Error removing friend:', error);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+      </View>
+    );
+  }
+
+  if (!user) {
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>Пользователь не найден</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Image
           style={styles.avatar}
-          source={{ uri: user.avatar }}
+          source={{ uri: user.avatar || 'https://via.placeholder.com/150' }}
         />
-        <Text style={styles.name}>{user.name}</Text>
-        <Text style={styles.bio}>{user.bio}</Text>
+        <Text style={styles.name}>{user.username || user.email}</Text>
+        <Text style={styles.bio}>{user.bio || 'Нет описания'}</Text>
       </View>
 
       <View style={styles.statsContainer}>
         <View style={styles.statItem}>
-          <Text style={styles.statNumber}>{user.stats.goals}</Text>
+          <Text style={styles.statNumber}>{user.stats?.goals || 0}</Text>
           <Text style={styles.statLabel}>Goals</Text>
         </View>
         <View style={styles.statItem}>
-          <Text style={styles.statNumber}>{user.stats.friends}</Text>
+          <Text style={styles.statNumber}>{user.stats?.friends || 0}</Text>
           <Text style={styles.statLabel}>Friends</Text>
         </View>
         <View style={styles.statItem}>
-          <Text style={styles.statNumber}>{user.stats.templates}</Text>
+          <Text style={styles.statNumber}>{user.stats?.templates || 0}</Text>
           <Text style={styles.statLabel}>Templates</Text>
         </View>
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.actionButton}>
-          <Text style={styles.actionButtonText}>Add Friend</Text>
-        </TouchableOpacity>
+        {friendStatus === 'not_friend' && (
+          <TouchableOpacity 
+            style={styles.actionButton}
+            onPress={handleAddFriend}
+          >
+            <Text style={styles.actionButtonText}>Add Friend</Text>
+          </TouchableOpacity>
+        )}
+        {friendStatus === 'pending' && (
+          <View style={[styles.actionButton, styles.pendingButton]}>
+            <Text style={styles.actionButtonText}>Request Sent</Text>
+          </View>
+        )}
+        {friendStatus === 'friend' && (
+          <TouchableOpacity 
+            style={[styles.actionButton, styles.removeButton]}
+            onPress={handleRemoveFriend}
+          >
+            <Text style={styles.actionButtonText}>Remove Friend</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity 
           style={[styles.actionButton, styles.messageButton]}
-          onPress={() => navigation.navigate('Chat')}
+          onPress={() => navigation.navigate('Chat', { userId: user.id })}
         >
           <Text style={styles.actionButtonText}>Message</Text>
         </TouchableOpacity>
@@ -70,6 +174,21 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#666',
   },
   header: {
     alignItems: 'center',
@@ -124,6 +243,12 @@ const styles = StyleSheet.create({
   },
   messageButton: {
     backgroundColor: '#34C759',
+  },
+  pendingButton: {
+    backgroundColor: '#FF9500',
+  },
+  removeButton: {
+    backgroundColor: '#FF3B30',
   },
   actionButtonText: {
     color: '#fff',

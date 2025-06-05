@@ -12,48 +12,46 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/Feather';
 import { useNavigation } from '@react-navigation/native';
 import { getCategoryStyle, getStatusStyle, getStatusText } from '../../utils/goalUtils';
+import { goalsAPI } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 const GoalsListScreen = () => {
   const [goals, setGoals] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigation = useNavigation();
+  const { currentUser } = useAuth();
+  const currentUserId = currentUser?.id;
 
   useEffect(() => {
     fetchGoals();
   }, []);
 
   const fetchGoals = async () => {
+    setLoading(true);
     try {
-      // TODO: Implement API call
-      // const token = await AsyncStorage.getItem('token');
-      // const res = await axios.get('/goals', {
-      //   headers: { Authorization: `Bearer ${token}` },
-      // });
-      // setGoals(Array.isArray(res.data) ? res.data : []);
-      
-      // Temporary mock data
-      setGoals([
-        {
-          id: '1',
-          name: 'Read 20 books',
-          description: 'Read 20 books by the end of the year',
-          category: 'Education',
-          status: 'progress',
-          dueDate: '2024-12-31T00:00:00.000Z',
-          steps: ['Choose books', 'Set reading schedule', 'Track progress'],
-        },
-        {
-          id: '2',
-          name: 'Run a marathon',
-          description: 'Complete a full marathon',
-          category: 'Health',
-          status: 'pending',
-          dueDate: '2024-06-30T00:00:00.000Z',
-          steps: ['Start training', 'Increase distance', 'Join running group'],
-        },
-      ]);
+      const res = await goalsAPI.getGoals();
+      // В некоторых случаях res может быть {data: [...]} или просто массив
+      const apiGoals = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      console.log('API goals:', apiGoals);
+      console.log('Current user:', currentUserId);
+
+      const goalsArr = apiGoals
+        .filter(goal => goal.user_id === currentUserId)
+        .map(goal => ({
+          id: goal.id,
+          name: goal.name,
+          description: goal.description,
+          category: goal.category,
+          status: goal.status || 'not_started',
+          dueDate: (goal.due_date && goal.due_date !== '0001-01-01T00:00:00Z') ? goal.due_date : null,
+          steps: Array.isArray(goal.steps) ? goal.steps.map(s => s.title) : [],
+        }));
+
+      console.log('Goals for FlatList:', goalsArr);
+      setGoals(goalsArr);
     } catch (err) {
       setGoals([]);
+      console.log('Error loading goals:', err);
     } finally {
       setLoading(false);
     }

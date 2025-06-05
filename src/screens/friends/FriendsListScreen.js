@@ -116,18 +116,16 @@ const FriendsListScreen = () => {
   );
 
   const renderFriend = ({ item }) => (
-    <View style={styles.friendCard}>
+    <TouchableOpacity
+      style={styles.friendItem}
+      onPress={() => navigation.navigate('UserProfile', { userId: item.id })}
+    >
       <View style={styles.friendInfo}>
-        <Text style={styles.friendName}>{item?.username || 'Unknown User'}</Text>
-        <Text style={styles.friendEmail}>{item?.email || 'No email'}</Text>
+        <Text style={styles.friendName}>{item.username}</Text>
+        <Text style={styles.friendEmail}>{item.email}</Text>
       </View>
-      <TouchableOpacity
-        style={styles.removeButton}
-        onPress={() => handleRemoveFriend(item.id)}
-      >
-        <Icon name="user-minus" size={20} color="#ef4444" />
-      </TouchableOpacity>
-    </View>
+      <Icon name="chevron-right" size={20} color="#94A3B8" />
+    </TouchableOpacity>
   );
 
   if (loading) {
@@ -292,7 +290,7 @@ const styles = StyleSheet.create({
   friendsList: {
     flex: 1,
   },
-  friendCard: {
+  friendItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -324,9 +322,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6b7280',
     marginTop: 4,
-  },
-  removeButton: {
-    padding: 8,
   },
   emptyContainer: {
     flex: 1,
